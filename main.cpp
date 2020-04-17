@@ -136,11 +136,11 @@ void Pinger::ping() {
   icp = (struct icmp*)(packet + hlen); 
   if (icp->icmp_type == ICMP_ECHOREPLY) {
     if (icp->icmp_seq != sequence_num) {
-      std::cout << "received sequence # " << icp->icmp_seq << std::endl;
+      std::cout << "received wrong sequence # " << icp->icmp_seq << std::endl;
       return;
     }
     if (icp->icmp_id != getpid()) {
-      std::cout << "received id " << icp->icmp_id << std::endl;
+      std::cout << "received wrong id " << icp->icmp_id << std::endl;
       return;
     }
 
