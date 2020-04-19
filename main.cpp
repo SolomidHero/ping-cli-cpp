@@ -4,6 +4,8 @@
 #include <string>
 #include <unistd.h>
 #include <errno.h>
+#include <exception>
+#include <signal.h>
 
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -25,6 +27,13 @@ void error(std::string msg) {
   exit(1);
 }
 
+sig_atomic_t volatile stop_criteria = 0;
+
+void sig_to_exception(int signal_num) {
+  stop_criteria = 1;
+}
+
+
 class Pinger {
  public:
   Pinger(const std::string& hostname, int port, float sleep_time);
@@ -33,12 +42,16 @@ class Pinger {
   }
 
   void ping();
+  void info(std::ostream& os);
+
+ private:
   uint16_t check_sum(uint16_t* addr, unsigned len);
 
  private:
   int datalen = 56;
   int cc = 64;
   int sequence_num = 0;
+  int recieved_num = 0;
   int sleep_interval;
 
   std::string hostname;
@@ -140,14 +153,23 @@ void Pinger::ping() {
       << inet_ntoa(from_addr.sin_addr)
       << ": icmp_seq=" << icp_from->icmp_seq;
   } else {
-    std::cout << "Recv: not an echo reply" << std::endl;
+    std::cerr << "recieved not an echo reply" << std::endl;
     return;
   }
 
+  recieved_num++;
   gettimeofday(&end, NULL);
   int time_diff = 1000000 * (end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec);
 
   std::cout << " time=" << time_diff << "us" << std::endl;
+}
+
+void Pinger::info(std::ostream& os=std::cout) {
+	os
+    << "----" << hostname << " PING Statistics----" << std::endl
+	  << sequence_num << " packets transmitted, "
+    << recieved_num << " packets received, "
+    << 100 * recieved_num / sequence_num << " packet loss" << std::endl;
 }
 
 uint16_t Pinger::check_sum(uint16_t *addr, unsigned len) {
@@ -186,13 +208,21 @@ int main(int argc, char** argv) {
   auto result = options.parse(argc, argv);  
   std::string hostname = result["hostname"].as<std::string>();
   int port = result["port"].as<int>();
-  int interval = result["interval"].as<float>();
+  float interval = result["interval"].as<float>();
 
   Pinger instance(hostname, port, interval);
-  while (true) {
+
+  struct sigaction sigIntHandler = {
+    .sa_handler = sig_to_exception,
+    .sa_flags = 0,
+  };
+  sigaction(SIGINT, &sigIntHandler, NULL);
+
+  while (!stop_criteria) {
     instance.ping();
     std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(interval * 1000)));
   }
+  instance.info();
 
   return 0;
 }
