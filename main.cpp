@@ -194,9 +194,7 @@ uint16_t Pinger::check_sum(uint16_t *addr, unsigned len) {
 }
 
 int main(int argc, char** argv) {
-  cxxopts::Options options("test", "A brief description");
-
-  options.parse_positional({"hostname"});
+  cxxopts::Options options("./ping-cli", "Send ICMP requests to provided host");
 
   options.add_options()
     ("hostname", "Host to ping", cxxopts::value<std::string>())
@@ -205,7 +203,15 @@ int main(int argc, char** argv) {
     ("h,help", "Print usage")
   ;
 
+  options.parse_positional({"hostname"});
+
   auto result = options.parse(argc, argv);  
+
+  if (result.count("help")) {
+    std::cout << options.help() << std::endl;
+    return 0;
+  }
+
   std::string hostname = result["hostname"].as<std::string>();
   int port = result["port"].as<int>();
   float interval = result["interval"].as<float>();
