@@ -8,6 +8,8 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/time.h>
+#include <chrono>
+#include <thread>
 #include <netdb.h>
 
 #include <arpa/inet.h>
@@ -25,7 +27,7 @@ void error(std::string msg) {
 
 class Pinger {
  public:
-  Pinger(const std::string& hostname, int port);
+  Pinger(const std::string& hostname, int port, float sleep_time);
   ~Pinger() {
     close(sockfd);
   }
@@ -36,29 +38,22 @@ class Pinger {
  private:
   int datalen = 56;
   int cc = 64;
+  int sequence_num = 0;
+  int sleep_interval;
 
   std::string hostname;
   int port;
 
   int sockfd;
-  int sequence_num = 1337;
+  fd_set fd_mask;
   struct hostent* host;
   struct sockaddr_in ping_addr;
-  struct icmp* icp;
 };
 
-Pinger::Pinger(const std::string& hostname, int port)
-    : hostname(hostname), port(port) {
+Pinger::Pinger(const std::string& hostname, int port, float sleep_time)
+    : hostname(hostname), port(port), sleep_interval(sleep_time) {
 
-  struct icmp icp_val = {
-    .icmp_type = ICMP_ECHO,
-    .icmp_code = 0,
-    .icmp_cksum = 0,
-    .icmp_seq = static_cast<n_short>(sequence_num),
-    .icmp_id = static_cast<n_short>(getpid()),
-  };
-  icp = &icp_val;
-
+  int socket_upd_param = 1;
   sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
   if (sockfd < 0) {
     error("ERROR creating socket");
@@ -88,16 +83,17 @@ void Pinger::ping() {
 
   gettimeofday(&start, NULL);
 
-  icp->icmp_cksum = check_sum((uint16_t*)icp, cc);
+  struct icmp icp = {
+    .icmp_type = ICMP_ECHO,
+    .icmp_code = 0,
+    .icmp_cksum = 0,
+    .icmp_seq = static_cast<n_short>(sequence_num++),
+    .icmp_id = static_cast<n_short>(getpid()),
+  };
+  icp.icmp_cksum = check_sum((uint16_t*)&icp, cc);
 
-  int send_result = sendto(
-    sockfd,
-    (char*)icp,
-    cc,
-    0,
-    (struct sockaddr*)&ping_addr,
-    (socklen_t)sizeof(struct sockaddr_in)
-  );
+  int send_result =
+    sendto(sockfd, (char*)&icp, cc, 0, (struct sockaddr*)&ping_addr, (socklen_t)sizeof(struct sockaddr_in));
   if (send_result < 0) {
     error("ERROR, couldn't sendto()");
   }
@@ -110,44 +106,39 @@ void Pinger::ping() {
     .tv_usec = 0,
   };
 
-  fd_set fd_mask;
   FD_ZERO(&fd_mask);
   FD_SET(sockfd, &fd_mask);
 
   if(select(sockfd + 1, &fd_mask, NULL, NULL, &timeout) == 0) {
+    std::cout << "No socket available" << std::endl;
     return;
   }
 
   struct sockaddr_in from_addr = {};
   int from_len = sizeof(from_addr);
   int packlen = datalen + MAXIPLEN + MAXICMPLEN;
-  char packet[512];
-  int ret = recvfrom(sockfd, packet, packlen, 0, (struct sockaddr*)&from_addr, (socklen_t*)&from_len);
-  if (ret < 0) {
+  char packet[packlen];
+  int recv_result = recvfrom(sockfd, packet, packlen, 0, (struct sockaddr*)&from_addr, (socklen_t*)&from_len);
+  if (recv_result < 0) {
     error("ERROR, couldn't recvfrom()");
   }
 
   struct ip* ip = (struct ip*)packet;
-  if (ret < (sizeof(struct ip) + ICMP_MINLEN)) { 
-    error("ERROR, packet too short (" + std::to_string(ret) + " bytes) from " + hostname);
+  if (recv_result < (sizeof(struct ip) + ICMP_MINLEN)) { 
+    error("ERROR, packet too short (" + std::to_string(recv_result) + " bytes) from " + hostname);
   } 
 
 	int hlen = sizeof(struct ip);
-  icp = (struct icmp*)(packet + hlen); 
-  if (icp->icmp_type == ICMP_ECHOREPLY) {
-    if (icp->icmp_seq != sequence_num) {
-      std::cout << "received wrong sequence # " << icp->icmp_seq << std::endl;
-      return;
-    }
-    if (icp->icmp_id != getpid()) {
-      std::cout << "received wrong id " << icp->icmp_id << std::endl;
-      return;
+  struct icmp* icp_from = (struct icmp*)(packet + hlen);
+  if (icp_from->icmp_type == ICMP_ECHOREPLY) {
+    if (icp_from->icmp_id != icp.icmp_id) {
+      error("ERROR received wrong id, id=" + std::to_string(icp_from->icmp_id));
     }
 
     std::cout
       << cc << " bytes from "
       << inet_ntoa(from_addr.sin_addr)
-      << ": icmp_seq=" << icp->icmp_seq;
+      << ": icmp_seq=" << icp_from->icmp_seq;
   } else {
     std::cout << "Recv: not an echo reply" << std::endl;
     return;
@@ -156,7 +147,7 @@ void Pinger::ping() {
   gettimeofday(&end, NULL);
   int time_diff = 1000000 * (end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec);
 
-  std::cout << " time=" << time_diff << " us" << std::endl;
+  std::cout << " time=" << time_diff << "us" << std::endl;
 }
 
 uint16_t Pinger::check_sum(uint16_t *addr, unsigned len) {
@@ -188,16 +179,20 @@ int main(int argc, char** argv) {
   options.add_options()
     ("hostname", "Host to ping", cxxopts::value<std::string>())
     ("p,port", "Ping specific port", cxxopts::value<int>()->default_value("7"))
+    ("i,interval", "Time interval between pings", cxxopts::value<float>()->default_value("1.0"))
     ("h,help", "Print usage")
   ;
 
   auto result = options.parse(argc, argv);  
   std::string hostname = result["hostname"].as<std::string>();
   int port = result["port"].as<int>();
+  int interval = result["interval"].as<float>();
 
-  Pinger instance(hostname, port);
-  instance.ping();
+  Pinger instance(hostname, port, interval);
+  while (true) {
+    instance.ping();
+    std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(interval * 1000)));
+  }
 
-  std::cout << "OK pinging host" << std::endl;
   return 0;
 }
