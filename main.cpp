@@ -22,7 +22,9 @@
 #define	MAXICMPLEN 76
 
 void error(std::string msg) {
-  std::cerr << strerror(errno) << std::endl;
+  if (errno != 0) {
+    std::cerr << strerror(errno) << std::endl;
+  }
   std::cerr << msg << std::endl;
   exit(1);
 }
