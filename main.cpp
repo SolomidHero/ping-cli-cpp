@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <string>
+#include <limits>
 #include <unistd.h>
 #include <errno.h>
 #include <exception>
@@ -32,6 +33,9 @@ void error(std::string msg) {
 sig_atomic_t volatile stop_criteria = 0;
 
 void sig_to_exception(int signal_num) {
+  if (stop_criteria) {
+    exit(1);
+  }
   stop_criteria = 1;
 }
 
@@ -171,7 +175,7 @@ void Pinger::info(std::ostream& os=std::cout) {
     << "----" << hostname << " PING Statistics----" << std::endl
 	  << sequence_num << " packets transmitted, "
     << recieved_num << " packets received, "
-    << 100 * recieved_num / sequence_num << " packet loss" << std::endl;
+    << 100 - 100 * recieved_num / sequence_num << "\% packet loss" << std::endl;
 }
 
 uint16_t Pinger::check_sum(uint16_t *addr, unsigned len) {
@@ -202,6 +206,7 @@ int main(int argc, char** argv) {
     ("hostname", "Host to ping", cxxopts::value<std::string>())
     ("p,port", "Ping specific port", cxxopts::value<int>()->default_value("7"))
     ("i,interval", "Time interval between pings", cxxopts::value<float>()->default_value("1.0"))
+    ("c,count", "Max number of packets to transmit", cxxopts::value<int>())
     ("h,help", "Print usage")
   ;
 
@@ -217,6 +222,13 @@ int main(int argc, char** argv) {
   std::string hostname = result["hostname"].as<std::string>();
   int port = result["port"].as<int>();
   float interval = result["interval"].as<float>();
+  int max_transmitted = std::numeric_limits<int>::max();
+  if (result.count("count")) {
+    max_transmitted = result["count"].as<int>();
+  }
+  if (max_transmitted < 0) {
+    error("invalid count of packets to transmit: " + std::to_string(max_transmitted));
+  }
 
   Pinger instance(hostname, port, interval);
 
@@ -226,8 +238,10 @@ int main(int argc, char** argv) {
   };
   sigaction(SIGINT, &sigIntHandler, NULL);
 
-  while (!stop_criteria) {
+  int transmitted = 0;
+  while (!stop_criteria && transmitted < max_transmitted) {
     instance.ping();
+    transmitted++;
     std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(interval * 1000)));
   }
   instance.info();
