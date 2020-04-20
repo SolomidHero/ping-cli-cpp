@@ -1,8 +1,12 @@
 #include "cxxopts/include/cxxopts.hpp"
 
 #include <iostream>
+#include <iomanip>
 #include <string>
 #include <limits>
+#include <chrono>
+#include <thread>
+
 #include <unistd.h>
 #include <errno.h>
 #include <exception>
@@ -11,16 +15,11 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/time.h>
-#include <chrono>
-#include <thread>
 #include <netdb.h>
 
 #include <arpa/inet.h>
 #include <netinet/ip.h>
 #include <netinet/ip_icmp.h>
-
-#define	MAXIPLEN 60
-#define	MAXICMPLEN 76
 
 void error(std::string msg) {
   if (errno != 0) {
@@ -52,8 +51,12 @@ class Pinger {
 
  private:
   uint16_t check_sum(uint16_t* addr, unsigned len);
+  void update_stats(double time_diff);
 
  private:
+  static int MAXIPLEN;
+  static int MAXICMPLEN;
+
   int datalen = 56;
   int cc = 64;
   int sequence_num = 0;
@@ -63,11 +66,19 @@ class Pinger {
   std::string hostname;
   int port;
 
+  double sum_time = 0;
+  double sq_sum_time = 0;
+  double min_time = std::numeric_limits<double>::max();
+  double max_time = 0;
+
   int sockfd;
   fd_set fd_mask;
   struct hostent* host;
   struct sockaddr_in ping_addr;
 };
+
+int Pinger::MAXIPLEN = 60;
+int Pinger::MAXICMPLEN = 76;
 
 Pinger::Pinger(const std::string& hostname, int port, float sleep_time)
     : hostname(hostname), port(port), sleep_interval(sleep_time) {
@@ -97,10 +108,7 @@ Pinger::Pinger(const std::string& hostname, int port, float sleep_time)
 }
 
 void Pinger::ping() {
-  struct timeval start;
-  struct timeval end;
-
-  gettimeofday(&start, NULL);
+  auto t_start = std::chrono::high_resolution_clock::now();
 
   struct icmp icp = {
     .icmp_type = ICMP_ECHO,
@@ -164,18 +172,26 @@ void Pinger::ping() {
   }
 
   recieved_num++;
-  gettimeofday(&end, NULL);
-  int time_diff = 1000000 * (end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec);
+  auto t_end = std::chrono::high_resolution_clock::now();
+  auto time_diff = std::chrono::duration<double, std::milli>(t_end - t_start).count();
+  update_stats (time_diff);
 
-  std::cout << " time=" << time_diff << "us" << std::endl;
+  std::cout
+    << std::setprecision(3) << std::fixed
+    << " time=" << time_diff
+    << "ms" << std::endl;
 }
 
 void Pinger::info(std::ostream& os=std::cout) {
 	os
+    << std::setprecision(3) << std::fixed
     << "----" << hostname << " PING Statistics----" << std::endl
 	  << sequence_num << " packets transmitted, "
     << recieved_num << " packets received, "
-    << 100 - 100 * recieved_num / sequence_num << "\% packet loss" << std::endl;
+    << 100 - 100 * recieved_num / sequence_num << "\% packet loss" << std::endl
+    << "round-trip min/avg/max/stddev = "
+    << min_time << "/" << sum_time / recieved_num << "/"
+    << max_time << "/" << sqrt(sq_sum_time / recieved_num - pow(sum_time, 2) / pow(recieved_num, 2)) << " ms" << std::endl;
 }
 
 uint16_t Pinger::check_sum(uint16_t *addr, unsigned len) {
@@ -197,6 +213,18 @@ uint16_t Pinger::check_sum(uint16_t *addr, unsigned len) {
   answer = ~sum;
 
   return answer;
+}
+
+void Pinger::update_stats(double time_diff) {
+  if (time_diff < min_time) {
+    min_time = time_diff;
+  }
+  if (time_diff > max_time) {
+    max_time = time_diff;
+  }
+  
+  sum_time += time_diff;
+  sq_sum_time += time_diff * time_diff;
 }
 
 int main(int argc, char** argv) {
