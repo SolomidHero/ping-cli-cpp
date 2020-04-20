@@ -15,5 +15,19 @@ git submodule init && git submodule update
 Use following commands: 
 ```
 g++ -std=c++11 -o  main.cpp ping-cli
-sudo ./ping-cli [-p port] host
+sudo ./ping-cli [-p port] [-i seconds] [-c max_packets] host
 ```
+
+Also you can find usage of this app:
+```
+sudo ./ping-cli -h
+# Send ICMP requests to provided host
+# Usage:
+#  ./ping-cli [OPTION...] positional parameters
+#
+#  -p, --port arg      Ping specific port (default: 7)
+#  -i, --interval arg  Time interval between pings (default: 1.0)
+#  -c, --count arg     Max number of packets to transmit
+#  -h, --help          Print usage
+```
+
